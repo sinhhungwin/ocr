@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RX Scanner (Test)</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    body { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; }
+    .muted { color: #6b7280; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: center; }
+    th { background: #f9fafb; font-weight: 700; }
+    td.label { text-align: left; font-weight: 700; background: #fcfcfd; }
+    input[type="text"] { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; }
+    button {
+      padding: 10px 12px; border: 1px solid #d1d5db; background: #111827; color: #fff;
+      border-radius: 10px; cursor: pointer; font-weight: 700;
+    }
+    button.secondary { background: #fff; color: #111827; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .status { padding: 10px 12px; border-radius: 10px; background: #f3f4f6; font-size: 13px; }
+    .split { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12px; }
+    @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+    img { max-width: 100%; border-radius: 12px; border: 1px solid #e5e7eb; }
+    .small { font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+
+<body>
+  <h1>RX Scanner (HTML test) 🧾📸</h1>
+  <p class="muted">
+    Chọn/chụp ảnh đơn kính → gửi lên OpenAI Responses API → điền bảng.
+    (Test thôi nên key để thẳng trong file. Đừng làm vậy khi chạy thật.)
+  </p>
+
+  <div class="split">
+    <div class="card">
+      <div class="row">
+        <!-- camera on mobile: capture="environment" -->
+        <input id="file" type="file" accept="image/*" capture="environment" />
+        <button id="btnScan">Scan & Fill</button>
+        <button id="btnClear" class="secondary">Clear</button>
+        <span id="status" class="status">Chưa có ảnh.</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Sphere</th>
+            <th>Cylinder</th>
+            <th>Axis</th>
+            <th>PD</th>
+            <th>ADD</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="label">Right</td>
+            <td><input id="R_sphere" type="text" placeholder="e.g. -1.25" /></td>
+            <td><input id="R_cyl" type="text" placeholder="e.g. -0.50" /></td>
+            <td><input id="R_axis" type="text" placeholder="e.g. 180" /></td>
+            <td><input id="R_pd" type="text" placeholder="e.g. 31.5" /></td>
+            <td><input id="R_add" type="text" placeholder="e.g. +1.50" /></td>
+          </tr>
+          <tr>
+            <td class="label">Left</td>
+            <td><input id="L_sphere" type="text" placeholder="e.g. -1.00" /></td>
+            <td><input id="L_cyl" type="text" placeholder="e.g. -0.75" /></td>
+            <td><input id="L_axis" type="text" placeholder="e.g. 10" /></td>
+            <td><input id="L_pd" type="text" placeholder="e.g. 31.5" /></td>
+            <td><input id="L_add" type="text" placeholder="e.g. +1.50" /></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:10px" class="muted small">
+        Tip: nếu đơn ghi PD “62” (binocular), anh có thể tự chia đôi thành 31/31 sau.
+        Còn ở đây mình cứ để model đọc thẳng theo ảnh + ghi chú.
+      </div>
+
+      <div style="margin-top:10px" class="card" aria-label="Debug box">
+        <div class="muted small">Debug (JSON trả về):</div>
+        <pre id="debug" class="mono small" style="white-space:pre-wrap;margin:8px 0 0;">(trống)</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px;">Preview ảnh:</div>
+      <img id="preview" alt="Preview" />
+      <div class="muted small" style="margin-top:10px;">
+        Nếu ảnh mờ/loá → scan sẽ ngu như anh em mình lúc 2h sáng. Chụp rõ, thẳng góc, đủ sáng.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /******************************************************************
+     * 1) CONFIG
+     ******************************************************************/
+    // ⚠️ TEST ONLY: ĐỪNG làm thế này khi deploy thật.
+    const OPENAI_API_KEY = "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";
+
+    // Model hỗ trợ vision + structured outputs (ví dụ trong docs dùng gpt-4.1-mini) :contentReference[oaicite:0]{index=0}
+    const MODEL = "gpt-4.1-mini";
+
+    // Endpoint Responses API :contentReference[oaicite:1]{index=1}
+    const ENDPOINT = "https://api.openai.com/v1/responses";
+
+    /******************************************************************
+     * 2) UI helpers
+     ******************************************************************/
+    const $ = (id) => document.getElementById(id);
+    const els = {
+      file: $("file"),
+      btnScan: $("btnScan"),
+      btnClear: $("btnClear"),
+      status: $("status"),
+      preview: $("preview"),
+      debug: $("debug"),
+      fields: {
+        R: { sphere: $("R_sphere"), cyl: $("R_cyl"), axis: $("R_axis"), pd: $("R_pd"), add: $("R_add") },
+        L: { sphere: $("L_sphere"), cyl: $("L_cyl"), axis: $("L_axis"), pd: $("L_pd"), add: $("L_add") },
+      }
+    };
+
+    function setStatus(msg) { els.status.textContent = msg; }
+    function setBusy(isBusy) {
+      els.btnScan.disabled = isBusy;
+      els.file.disabled = isBusy;
+      els.btnClear.disabled = isBusy;
+    }
+
+    function clearAll() {
+      els.preview.removeAttribute("src");
+      els.debug.textContent = "(trống)";
+      for (const side of ["R","L"]) {
+        for (const k of ["sphere","cyl","axis","pd","add"]) els.fields[side][k].value = "";
+      }
+      setStatus("Đã clear.");
+    }
+
+    function fillFromResult(result) {
+      // result = { right:{...}, left:{...}, notes, confidence }
+      const norm = (v) => (v === null || v === undefined) ? "" : String(v);
+
+      if (result?.right) {
+        els.fields.R.sphere.value = norm(result.right.sphere);
+        els.fields.R.cyl.value    = norm(result.right.cylinder);
+        els.fields.R.axis.value   = norm(result.right.axis);
+        els.fields.R.pd.value     = norm(result.right.pd);
+        els.fields.R.add.value    = norm(result.right.add);
+      }
+      if (result?.left) {
+        els.fields.L.sphere.value = norm(result.left.sphere);
+        els.fields.L.cyl.value    = norm(result.left.cylinder);
+        els.fields.L.axis.value   = norm(result.left.axis);
+        els.fields.L.pd.value     = norm(result.left.pd);
+        els.fields.L.add.value    = norm(result.left.add);
+      }
+    }
+
+    /******************************************************************
+     * 3) Image → base64 dataURL
+     ******************************************************************/
+    function fileToDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    /******************************************************************
+     * 4) Call OpenAI Responses API (vision + structured JSON)
+     ******************************************************************/
+    async function scanImageAndFill(dataUrl) {
+      // Image input format: {type:"input_image", image_url:"data:image/...;base64,..."} :contentReference[oaicite:2]{index=2}
+      const schema = {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          right: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              sphere:   { type: ["string","null"] },
+              cylinder: { type: ["string","null"] },
+              axis:     { type: ["string","null"] },
+              pd:       { type: ["string","null"] },
+              add:      { type: ["string","null"] }
+            },
+            required: ["sphere","cylinder","axis","pd","add"]
+          },
+          left: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              sphere:   { type: ["string","null"] },
+              cylinder: { type: ["string","null"] },
+              axis:     { type: ["string","null"] },
+              pd:       { type: ["string","null"] },
+              add:      { type: ["string","null"] }
+            },
+            required: ["sphere","cylinder","axis","pd","add"]
+          },
+          notes: { type: ["string","null"] },
+          confidence: { type: "integer", minimum: 0, maximum: 100 }
+        },
+        required: ["right","left","notes","confidence"]
+      };
+
+      const body = {
+        model: MODEL,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+`Bạn là trợ lý đọc đơn kính (eyeglass prescription) từ ảnh.
+Nhiệm vụ: trích xuất đúng 5 trường cho mỗi mắt: Sphere, Cylinder, Axis, PD, ADD.
+
+Quy tắc:
+- Giữ nguyên dấu +/-, dấu chấm thập phân như trên ảnh.
+- Axis luôn là số 0-180 (nếu không có, trả null).
+- Nếu PD chỉ có 1 số (binocular PD), hãy trả số đó vào cả right.pd và left.pd và ghi notes rằng "binocular PD".
+- Nếu ảnh không có ADD (single vision), trả null cho add.
+- Nếu không chắc 1 trường, trả null cho trường đó và ghi notes ngắn gọn.
+Chỉ trả về JSON theo schema.`
+              },
+              {
+                type: "input_image",
+                image_url: dataUrl
+              }
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "rx_extract",
+            strict: true,
+            schema
+          }
+        }
+      };
+
+      const res = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt}`);
+      }
+
+      const json = await res.json();
+
+      // 1) Ưu tiên output_text nếu có (docs có helper output_text trong SDK; API thường trả field này) :contentReference[oaicite:3]{index=3}
+      let raw = json.output_text;
+
+      // 2) Fallback: tìm message->content->output_text
+      if (!raw && Array.isArray(json.output)) {
+        for (const item of json.output) {
+          if (item.type === "message" && item.role === "assistant" && Array.isArray(item.content)) {
+            const part = item.content.find(p => p.type === "output_text" || p.type === "text");
+            if (part?.text) { raw = part.text; break; }
+          }
+        }
+      }
+
+      if (!raw) {
+        // show full response for debugging
+        els.debug.textContent = JSON.stringify(json, null, 2);
+        throw new Error("Không tìm thấy output_text trong response (check debug).");
+      }
+
+      // raw có thể là JSON string
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        // nếu model trả JSON nhưng có rác, thử trích đoạn {...}
+        const m = raw.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error("Output không parse được JSON. Check debug.");
+        parsed = JSON.parse(m[0]);
+      }
+
+      return { parsed, raw, full: json };
+    }
+
+    /******************************************************************
+     * 5) Wire up events
+     ******************************************************************/
+    els.btnClear.addEventListener("click", clearAll);
+
+    els.file.addEventListener("change", async () => {
+      const file = els.file.files?.[0];
+      if (!file) return;
+      const url = await fileToDataURL(file);
+      els.preview.src = url;
+      setStatus("Đã có ảnh. Bấm Scan & Fill.");
+    });
+
+    els.btnScan.addEventListener("click", async () => {
+      try {
+        const file = els.file.files?.[0];
+        if (!file) {
+          alert("Anh chọn/chụp ảnh trước đã.");
+          return;
+        }
+        if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_YOUR_KEY_HERE")) {
+          alert("Anh dán API key vào biến OPENAI_API_KEY trước nhé.");
+          return;
+        }
+
+        setBusy(true);
+        setStatus("Đang scan…");
+        els.debug.textContent = "(đang gọi API…)";
+
+        const dataUrl = await fileToDataURL(file);
+        const { parsed, raw } = await scanImageAndFill(dataUrl);
+
+        els.debug.textContent = JSON.stringify(parsed, null, 2);
+        fillFromResult(parsed);
+
+        const c = parsed?.confidence ?? 0;
+        setStatus(`Done. Confidence: ${c}/100`);
+      } catch (err) {
+        console.error(err);
+        setStatus("Lỗi. Xem debug.");
+        els.debug.textContent = String(err?.message || err);
+        alert("Scan lỗi rồi anh ơi. Mở console + xem debug để biết chi tiết.");
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    // initial
+    clearAll();
+    setStatus("Chưa có ảnh.");
+  </script>
+
+  <hr style="margin:22px 0;border:none;border-top:1px solid #e5e7eb;" />
+
+  <div class="muted small">
+    <div><b>Cách chạy cho đỡ lỗi CORS/file://</b></div>
+    <ol>
+      <li>Mở Terminal tại thư mục chứa file này</li>
+      <li>Chạy: <span class="mono">python3 -m http.server 8000</span></li>
+      <li>Mở: <span class="mono">http://localhost:8000</span></li>
+    </ol>
+    <div>
+      Nếu anh deploy thật: API key phải nằm server-side (đừng “public” nữa, không lại thành “public funeral”).
+    </div>
+  </div>
+</body>
+</html>
