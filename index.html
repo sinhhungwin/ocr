@@ -132,6 +132,7 @@
     }
 
     #apiKey { min-width: 260px; max-width: 320px; }
+    #usdToVnd { width: 140px; }
 
     button {
       min-height: 40px;
@@ -231,6 +232,7 @@
         <input id="cameraFile" type="file" accept="image/*" capture="environment" style="display:none" />
         <button id="btnCamera" type="button" class="secondary">Chụp ảnh</button>
         <input id="apiKey" type="password" placeholder="Nhập OpenAI API key (sk-...)" />
+        <input id="usdToVnd" type="text" value="26270" placeholder="USD/VND" title="Tỷ giá USD sang VND" />
         <button id="btnScan">Scan & Fill</button>
         <button id="btnClear" class="secondary">Clear</button>
         <span id="status" class="status">Chưa có ảnh.</span>
@@ -277,6 +279,13 @@
         <div class="muted small">Debug (JSON trả về):</div>
         <pre id="debug" class="mono small" style="white-space:pre-wrap;margin:8px 0 0;">(trống)</pre>
       </div>
+
+      <div style="margin-top:10px" class="card" aria-label="Cost box">
+        <div class="muted small">Token & Cost (ước tính theo usage của API):</div>
+        <div id="costUsd" class="mono" style="margin-top:6px;font-weight:700;">USD: -</div>
+        <div id="costVnd" class="mono" style="margin-top:4px;font-weight:700;">VND: -</div>
+        <pre id="tokenInfo" class="mono small" style="white-space:pre-wrap;margin:8px 0 0;">(chưa có dữ liệu)</pre>
+      </div>
     </div>
 
     <div class="card">
@@ -300,6 +309,14 @@
 
     // Endpoint Responses API :contentReference[oaicite:1]{index=1}
     const ENDPOINT = "https://api.openai.com/v1/responses";
+    // Pricing per 1M tokens for gpt-4.1-mini (text/cached/output).
+    const MODEL_PRICING = {
+      "gpt-4.1-mini": {
+        inputUsdPer1M: 0.40,
+        cachedInputUsdPer1M: 0.10,
+        outputUsdPer1M: 1.60
+      }
+    };
 
     /******************************************************************
      * 2) UI helpers
@@ -310,11 +327,15 @@
       cameraFile: $("cameraFile"),
       btnCamera: $("btnCamera"),
       apiKey: $("apiKey"),
+      usdToVnd: $("usdToVnd"),
       btnScan: $("btnScan"),
       btnClear: $("btnClear"),
       status: $("status"),
       preview: $("preview"),
       debug: $("debug"),
+      costUsd: $("costUsd"),
+      costVnd: $("costVnd"),
+      tokenInfo: $("tokenInfo"),
       fields: {
         R: { sphere: $("R_sphere"), cyl: $("R_cyl"), axis: $("R_axis"), pd: $("R_pd"), add: $("R_add") },
         L: { sphere: $("L_sphere"), cyl: $("L_cyl"), axis: $("L_axis"), pd: $("L_pd"), add: $("L_add") },
@@ -365,6 +386,9 @@
       els.cameraFile.value = "";
       els.preview.removeAttribute("src");
       els.debug.textContent = "(trống)";
+      els.costUsd.textContent = "USD: -";
+      els.costVnd.textContent = "VND: -";
+      els.tokenInfo.textContent = "(chưa có dữ liệu)";
       for (const side of ["R","L"]) {
         for (const k of ["sphere","cyl","axis","pd","add"]) els.fields[side][k].value = "";
       }
@@ -457,6 +481,80 @@
           ? Math.round(confidenceValues.reduce((a, b) => a + b, 0) / confidenceValues.length)
           : 0
       };
+    }
+
+    function parseUsdToVndRate(raw) {
+      const cleanedDigits = String(raw || "").replace(/[^\d]/g, "");
+      const rate = Number(cleanedDigits);
+      return Number.isFinite(rate) && rate > 0 ? rate : null;
+    }
+
+    function formatUsd(value) {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 6
+      }).format(value);
+    }
+
+    function formatVnd(value) {
+      return new Intl.NumberFormat("vi-VN", {
+        style: "currency",
+        currency: "VND",
+        maximumFractionDigits: 0
+      }).format(value);
+    }
+
+    function extractUsage(json) {
+      const usage = json?.usage || {};
+      const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? 0);
+      const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? 0);
+      const cachedInputTokens = Number(
+        usage.input_tokens_details?.cached_tokens ??
+        usage.prompt_tokens_details?.cached_tokens ??
+        0
+      );
+      const totalTokens = Number(usage.total_tokens ?? (inputTokens + outputTokens));
+      return {
+        inputTokens: Number.isFinite(inputTokens) ? inputTokens : 0,
+        outputTokens: Number.isFinite(outputTokens) ? outputTokens : 0,
+        cachedInputTokens: Number.isFinite(cachedInputTokens) ? cachedInputTokens : 0,
+        totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0
+      };
+    }
+
+    function estimateCallCost(usage, model, usdToVndRate) {
+      const pricing = MODEL_PRICING[model] || MODEL_PRICING["gpt-4.1-mini"];
+      const uncachedInputTokens = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
+      const usd =
+        (uncachedInputTokens / 1_000_000) * pricing.inputUsdPer1M +
+        (usage.cachedInputTokens / 1_000_000) * pricing.cachedInputUsdPer1M +
+        (usage.outputTokens / 1_000_000) * pricing.outputUsdPer1M;
+      return {
+        usd,
+        vnd: usd * usdToVndRate,
+        uncachedInputTokens
+      };
+    }
+
+    function renderCostSummary(usageList, usdToVndRate, model) {
+      const lines = [`Model: ${model}`, `Ty gia: 1 USD = ${Math.round(usdToVndRate).toLocaleString("vi-VN")} VND`];
+      let totalUsd = 0;
+      let totalVnd = 0;
+
+      usageList.forEach((usage, i) => {
+        const estimate = estimateCallCost(usage, model, usdToVndRate);
+        totalUsd += estimate.usd;
+        totalVnd += estimate.vnd;
+        lines.push(
+          `Call ${i + 1}: in ${usage.inputTokens} (cached ${usage.cachedInputTokens}), out ${usage.outputTokens}, total ${usage.totalTokens}, cost ${formatUsd(estimate.usd)} (~${formatVnd(estimate.vnd)})`
+        );
+      });
+
+      els.costUsd.textContent = `USD: ${formatUsd(totalUsd)}`;
+      els.costVnd.textContent = `VND: ${formatVnd(totalVnd)}`;
+      els.tokenInfo.textContent = lines.join("\n");
     }
 
     /******************************************************************
@@ -593,7 +691,7 @@ Chỉ trả về JSON theo schema.`
         parsed = JSON.parse(m[0]);
       }
 
-      return { parsed, raw, full: json };
+      return { parsed, raw, full: json, usage: extractUsage(json) };
     }
 
     /******************************************************************
@@ -635,21 +733,30 @@ Chỉ trả về JSON theo schema.`
           alert("Anh nhập OpenAI API key hợp lệ (bắt đầu bằng sk-) trước nhé.");
           return;
         }
+        const usdToVndRate = parseUsdToVndRate(els.usdToVnd.value);
+        if (!usdToVndRate) {
+          alert("Anh nhập tỷ giá USD/VND hợp lệ trước nhé (ví dụ 26270).");
+          return;
+        }
 
         setBusy(true);
         setStatus(`Đang scan ${files.length} ảnh…`);
         els.debug.textContent = "(đang gọi API…)";
+        els.tokenInfo.textContent = "(đang tính token/cost...)";
 
         const parsedList = [];
+        const usageList = [];
         for (let i = 0; i < files.length; i++) {
           setStatus(`Đang scan ảnh ${i + 1}/${files.length}…`);
           const dataUrl = await fileToDataURL(files[i]);
-          const { parsed } = await scanImageAndFill(dataUrl, apiKey);
+          const { parsed, usage } = await scanImageAndFill(dataUrl, apiKey);
           parsedList.push(parsed);
+          usageList.push(usage);
         }
 
         const merged = mergeParsedResults(parsedList);
-        els.debug.textContent = JSON.stringify({ perImage: parsedList, merged }, null, 2);
+        renderCostSummary(usageList, usdToVndRate, MODEL);
+        els.debug.textContent = JSON.stringify({ perImage: parsedList, merged, usage: usageList }, null, 2);
         fillFromResult(merged);
 
         const c = merged?.confidence ?? 0;
