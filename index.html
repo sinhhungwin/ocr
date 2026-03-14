@@ -105,7 +105,7 @@
       min-width: 72px;
     }
 
-    input[type="text"], input[type="password"] {
+    input[type="text"], input[type="password"], textarea {
       width: 100%;
       min-height: 40px;
       padding: 8px 10px;
@@ -116,7 +116,7 @@
       transition: border-color .2s ease, box-shadow .2s ease;
     }
 
-    input[type="text"]:focus, input[type="password"]:focus {
+    input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
       outline: none;
       border-color: var(--accent-2);
       box-shadow: 0 0 0 3px rgba(25, 118, 106, 0.16);
@@ -275,6 +275,19 @@
         Trường hợp đặc biệt 2 ảnh (mỗi ảnh 1 mắt, mắt còn lại toàn 0): app sẽ tự merge.
       </div>
 
+      <div style="margin-top:10px" class="card" aria-label="Clipboard box">
+        <div class="row" style="justify-content:space-between;">
+          <div class="muted small">Prescription text để copy lại khi cần:</div>
+          <button id="btnCopyClipboard" type="button" class="secondary">Copy to Clipboard</button>
+        </div>
+        <textarea
+          id="clipboardText"
+          class="mono small"
+          style="margin-top:8px;min-height:140px;resize:vertical;white-space:pre;"
+          placeholder="Sau khi scan, text sẽ hiện ở đây..."
+        ></textarea>
+      </div>
+
       <div style="margin-top:10px" class="card" aria-label="Debug box">
         <div class="muted small">Debug (JSON trả về):</div>
         <pre id="debug" class="mono small" style="white-space:pre-wrap;margin:8px 0 0;">(trống)</pre>
@@ -330,8 +343,10 @@
       usdToVnd: $("usdToVnd"),
       btnScan: $("btnScan"),
       btnClear: $("btnClear"),
+      btnCopyClipboard: $("btnCopyClipboard"),
       status: $("status"),
       preview: $("preview"),
+      clipboardText: $("clipboardText"),
       debug: $("debug"),
       costUsd: $("costUsd"),
       costVnd: $("costVnd"),
@@ -378,6 +393,7 @@
       els.cameraFile.disabled = isBusy;
       els.btnCamera.disabled = isBusy;
       els.btnClear.disabled = isBusy;
+      els.btnCopyClipboard.disabled = isBusy;
     }
 
     function clearAll() {
@@ -385,6 +401,7 @@
       els.file.value = "";
       els.cameraFile.value = "";
       els.preview.removeAttribute("src");
+      els.clipboardText.value = "";
       els.debug.textContent = "(trống)";
       els.costUsd.textContent = "USD: -";
       els.costVnd.textContent = "VND: -";
@@ -413,6 +430,48 @@
         els.fields.L.pd.value     = norm(result.left.pd);
         els.fields.L.add.value    = norm(result.left.add);
       }
+    }
+
+    function toCommaDecimal(v) {
+      const s = asText(v);
+      if (!s) return "";
+      return s.replace(/\./g, ",");
+    }
+
+    function buildClipboardPrescriptionText(result) {
+      const rSphere = toCommaDecimal(result?.right?.sphere);
+      const rCyl = toCommaDecimal(result?.right?.cylinder);
+      const rAxis = asText(result?.right?.axis);
+      const lSphere = toCommaDecimal(result?.left?.sphere);
+      const lCyl = toCommaDecimal(result?.left?.cylinder);
+      const lAxis = asText(result?.left?.axis);
+
+      return [
+        "PRESCRIPTION",
+        `R ${rSphere} ${rCyl} ${rAxis}`.trim(),
+        `L ${lSphere} ${lCyl} ${lAxis}`.trim(),
+        "TEXT COPIED TO CLIPBOARD",
+        `${rSphere} ${rCyl}`.trim(),
+        `${lSphere} ${lCyl}`.trim()
+      ].join("\n");
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "absolute";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (!ok) throw new Error("Không copy được clipboard.");
     }
 
     const RX_FIELDS = ["sphere", "cylinder", "axis", "pd", "add"];
@@ -758,9 +817,13 @@ Chỉ trả về JSON theo schema.`
         renderCostSummary(usageList, usdToVndRate, MODEL);
         els.debug.textContent = JSON.stringify({ perImage: parsedList, merged, usage: usageList }, null, 2);
         fillFromResult(merged);
+        const clipboardText = buildClipboardPrescriptionText(merged);
+        els.clipboardText.value = clipboardText;
+        await copyTextToClipboard(clipboardText);
+        els.debug.textContent += `\n\n----- COPIED -----\n${clipboardText}`;
 
         const c = merged?.confidence ?? 0;
-        setStatus(`Done (${files.length} ảnh). Confidence: ${c}/100`);
+        setStatus(`Done (${files.length} ảnh). Confidence: ${c}/100. Đã copy prescription.`);
       } catch (err) {
         console.error(err);
         setStatus("Lỗi. Xem debug.");
@@ -768,6 +831,21 @@ Chỉ trả về JSON theo schema.`
         alert("Scan lỗi rồi anh ơi. Mở console + xem debug để biết chi tiết.");
       } finally {
         setBusy(false);
+      }
+    });
+
+    els.btnCopyClipboard.addEventListener("click", async () => {
+      try {
+        const text = (els.clipboardText.value || "").trim();
+        if (!text) {
+          alert("Chưa có text để copy. Anh scan trước nhé.");
+          return;
+        }
+        await copyTextToClipboard(text);
+        setStatus("Đã copy clipboard từ textbox.");
+      } catch (err) {
+        console.error(err);
+        alert("Copy lỗi rồi anh ơi. Thử lại giúp em nhé.");
       }
     });
 
