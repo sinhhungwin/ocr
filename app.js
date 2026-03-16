@@ -130,16 +130,10 @@ function toCommaDecimal(v) {
 function buildClipboardPrescriptionText(result) {
   const rSphere = toCommaDecimal(result?.right?.sphere);
   const rCyl = toCommaDecimal(result?.right?.cylinder);
-  const rAxis = asText(result?.right?.axis);
   const lSphere = toCommaDecimal(result?.left?.sphere);
   const lCyl = toCommaDecimal(result?.left?.cylinder);
-  const lAxis = asText(result?.left?.axis);
 
   return [
-    "PRESCRIPTION",
-    `R ${rSphere} ${rCyl} ${rAxis}`.trim(),
-    `L ${lSphere} ${lCyl} ${lAxis}`.trim(),
-    "TEXT COPIED TO CLIPBOARD",
     `${rSphere} ${rCyl}`.trim(),
     `${lSphere} ${lCyl}`.trim()
   ].join("\n");
